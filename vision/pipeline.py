@@ -16,6 +16,11 @@ from vision.tile_parser import TileParser
 from vision.ocr import OCREngine
 from utils.image_hash import compute_image_hash
 
+import google.generativeai as genai
+from config import Config
+from vision.constants import KNOWN_SCENES
+from rapidfuzz import process, fuzz
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +74,20 @@ class VisionPipeline:
             # Fallback for scene name: Try full image if header crop failed
             if not scene:
                 scene = self.ocr.extract_scene_title(image)
+            
+            # GOOGLE AI FALLBACK (Premium Vision)
+            # If scene is still missing or looks like garbage, try Gemini Vision if API key is present
+            if Config.GOOGLE_API_KEY and (not scene or len(scene) < 3 or any(c in scene for c in "——=€{")):
+                logger.info("Local OCR failed or returned garbage, attempting Gemini Vision fallback...")
+                gemini_scene = await self._process_with_gemini(image_data)
+                if gemini_scene:
+                    # Apply fuzzy matching to Gemini result as well to ensure normalization
+                    match = process.extractOne(gemini_scene, KNOWN_SCENES, scorer=fuzz.WRatio)
+                    if match and match[1] > 70:
+                        scene = match[0]
+                    else:
+                        scene = gemini_scene
+                    logger.info(f"Gemini Vision recovered scene: {scene}")
                 
             result["scene"] = scene
             
@@ -104,13 +123,45 @@ class VisionPipeline:
             result["pieces"] = pieces
             result["success"] = True
             
-            logger.info(f"Processed image (Multi-Pass): {len(pieces)} pieces found, scene={scene}")
+            logger.info(f"Processed image (Multi-Pass + Gemini): {len(pieces)} pieces found, scene={scene}")
             
         except Exception as e:
             logger.error(f"Vision pipeline failed: {e}", exc_info=True)
             result["error"] = str(e)
         
         return result
+
+    async def _process_with_gemini(self, image_data: bytes) -> Optional[str]:
+        """
+        Use Google Gemini 1.5 Flash to extract the scene name.
+        Requires GOOGLE_API_KEY in .env.
+        """
+        try:
+            genai.configure(api_key=Config.GOOGLE_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            # Convert bytes to PIL Image for Gemini
+            pil_img = Image.open(BytesIO(image_data))
+            
+            prompt = (
+                "This is a screenshot from a puzzle game. "
+                "Look at the header area and tell me the name of the 'Scene'. "
+                "Respond ONLY with the scene name, no extra text. "
+                "Example: 'Honor and Glory', 'Rekindled Flames'."
+            )
+            
+            response = model.generate_content([prompt, pil_img])
+            text = response.text.strip()
+            
+            # Basic cleanup
+            if ":" in text:
+                text = text.split(":")[-1].strip()
+            
+            return text if len(text) > 2 else None
+            
+        except Exception as e:
+            logger.error(f"Gemini API call failed: {e}")
+            return None
     
     async def _download_image(self, url: str) -> bytes:
         """
@@ -187,6 +238,9 @@ class VisionPipeline:
             if not scene:
                 scene = self.ocr.extract_scene_title(image)
                 
+            # Note: Gemini fallback is not implemented in sync process_image_bytes
+            # since the Gemini API is async. Use process_image_url for premium results.
+            
             result["scene"] = scene
             
             # Multi-Pass Grid Detection

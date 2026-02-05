@@ -24,6 +24,9 @@ class Config:
     # Tesseract (optional)
     TESSERACT_PATH: str = os.getenv("TESSERACT_PATH", "")
     
+    # Google API Key (for Gemini Vision)
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     
