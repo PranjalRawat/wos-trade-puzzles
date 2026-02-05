@@ -38,33 +38,53 @@ class GridDetector:
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Apply Gaussian blur to reduce noise
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Apply bilateral filter to preserve edges while removing noise
+        blurred = cv2.bilateralFilter(gray, 9, 75, 75)
         
-        # Edge detection
-        edges = cv2.Canny(blurred, 50, 150)
+        # Adaptive thresholding to find tile borders
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 
+            11, 2
+        )
         
         # Find contours
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         # Filter and extract bounding boxes
-        tiles = []
+        potential_tiles = []
         for contour in contours:
             area = cv2.contourArea(contour)
             
-            # Filter by area
+            # Filter by area (puzzle tiles are usually substantial)
             if self.min_tile_area <= area <= self.max_tile_area:
                 x, y, w, h = cv2.boundingRect(contour)
                 
-                # Filter by aspect ratio (tiles should be roughly square)
+                # Filter by aspect ratio (tiles should be nearly square)
                 aspect_ratio = w / h if h > 0 else 0
-                if 0.5 <= aspect_ratio <= 2.0:
-                    tiles.append((x, y, w, h))
+                if 0.8 <= aspect_ratio <= 1.2:  # Tightened aspect ratio
+                    potential_tiles.append((x, y, w, h))
+        
+        if not potential_tiles:
+            logger.warning("No potential tiles found")
+            return []
+            
+        # Refine: Keep only tiles that are similar in size to the median tile
+        # This helps exclude small UI icons or large layout boxes
+        areas = [w * h for x, y, w, h in potential_tiles]
+        median_area = np.median(areas)
+        
+        tiles = []
+        for tile in potential_tiles:
+            tile_area = tile[2] * tile[3]
+            if 0.7 * median_area <= tile_area <= 1.3 * median_area:
+                tiles.append(tile)
         
         # Sort tiles: top-to-bottom, left-to-right
         tiles = self._sort_tiles(tiles)
         
-        logger.info(f"Detected {len(tiles)} tiles")
+        logger.info(f"Detected {len(tiles)} tiles after filtering outliers")
         return tiles
     
     def _sort_tiles(self, tiles: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:

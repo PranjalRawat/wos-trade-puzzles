@@ -78,8 +78,8 @@ class TileParser:
         
         # Define yellow/gold color range for stars
         # Adjust these values based on actual game UI
-        lower_yellow = np.array([15, 100, 100])
-        upper_yellow = np.array([35, 255, 255])
+        lower_yellow = np.array([15, 80, 80])  # Lowered thresholds for better detection
+        upper_yellow = np.array([40, 255, 255])
         
         # Create mask for star color
         mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -91,14 +91,14 @@ class TileParser:
         star_count = 0
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > 50:  # Minimum area for a star
+            if area > 30:  # Lowered minimum area
                 star_count += 1
         
-        # Clamp to valid range
-        star_count = min(max(star_count, 1), 5)
+        # Pieces can have 0 stars if they are grayed out/missing
+        star_count = min(star_count, 5)
         
         # Confidence based on detection clarity
-        confidence = 0.7 if star_count > 0 else 0.3
+        confidence = 0.8 if star_count > 0 else 0.5
         
         logger.debug(f"Detected {star_count} stars (confidence: {confidence})")
         return star_count, confidence
@@ -108,7 +108,7 @@ class TileParser:
         Detect number of duplicates from badge.
         
         Strategy:
-        1. Look for badge region (usually top-right corner)
+        1. Look for badge region (bottom-right corner)
         2. Use color detection to find badge
         3. OCR to extract number
         
@@ -118,22 +118,22 @@ class TileParser:
         Returns:
             (duplicate_count, confidence)
         """
-        # Look for badge in top-right corner
+        # Look for badge in bottom-right corner (based on provided screenshots)
         height, width = tile_image.shape[:2]
-        badge_region = tile_image[0:int(height*0.3), int(width*0.7):width]
+        # Badge is typically in the bottom 30% and right 40%
+        badge_region = tile_image[int(height*0.7):height, int(width*0.6):width]
         
         # Convert to HSV
         hsv = cv2.cvtColor(badge_region, cv2.COLOR_BGR2HSV)
         
-        # Define color range for duplicate badge (adjust based on game UI)
-        # Assuming badges are bright/colorful
-        lower_badge = np.array([0, 100, 100])
-        upper_badge = np.array([180, 255, 255])
+        # Define color range for duplicate badge (usually green in screenshots)
+        lower_green = np.array([35, 50, 50])
+        upper_green = np.array([85, 255, 255])
         
-        mask = cv2.inRange(hsv, lower_badge, upper_badge)
+        mask = cv2.inRange(hsv, lower_green, upper_green)
         
         # Check if badge exists
-        if cv2.countNonZero(mask) < 50:
+        if cv2.countNonZero(mask) < 40:
             # No badge detected = 0 duplicates
             return 0, 0.9
         
@@ -141,10 +141,11 @@ class TileParser:
         duplicate_count = self.ocr.extract_number_from_badge(badge_region)
         
         if duplicate_count is not None:
-            return duplicate_count, 0.8
+            return duplicate_count, 0.9
         else:
-            # Fallback: assume 1 duplicate if badge exists but OCR fails
-            return 1, 0.4
+            # Fallback: assume 1 duplicate if badge exists (+1)
+            # Screenshots show +1, +4 etc. The '+' might confuse OCR sometimes.
+            return 1, 0.5
     
     def _template_match_stars(self, tile_image: np.ndarray) -> Optional[int]:
         """
