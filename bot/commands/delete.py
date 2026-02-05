@@ -13,7 +13,7 @@ from inventory.queries import get_or_create_user, clear_user_inventory, get_all_
 logger = logging.getLogger(__name__)
 
 
-class ClearConfirmation(discord.ui.View):
+class DeleteConfirmation(discord.ui.View):
     """Confirmation view with Yes/No buttons."""
     
     def __init__(self, user_id: int, scene: Optional[str] = None):
@@ -38,12 +38,12 @@ class ClearConfirmation(discord.ui.View):
         await interaction.response.send_message("Deletion cancelled.", ephemeral=True)
 
 
-def register_clear_command(tree: app_commands.CommandTree):
-    """Register /clear command."""
+def register_delete_command(tree: app_commands.CommandTree):
+    """Register /delete command."""
     
-    @tree.command(name="clear", description="Reset your inventory data (optional: specific scene)")
-    @app_commands.describe(scene="The specific puzzle scene to clear (leave empty for full reset)")
-    async def clear_command(interaction: discord.Interaction, scene: Optional[str] = None):
+    @tree.command(name="delete", description="Reset your inventory data (optional: specific scene)")
+    @app_commands.describe(scene="The specific puzzle scene to delete (leave empty for full reset)")
+    async def delete_command(interaction: discord.Interaction, scene: Optional[str] = None):
         """Reset user inventory."""
         
         # Get user ID
@@ -57,13 +57,13 @@ def register_clear_command(tree: app_commands.CommandTree):
         embed = discord.Embed(
             title="⚠️ Confirm Inventory Deletion",
             description=(
-                f"Are you sure you want to clear {target_text}?\n\n"
+                f"Are you sure you want to delete {target_text}?\n\n"
                 "**This action cannot be undone.**"
             ),
             color=discord.Color.red()
         )
         
-        view = ClearConfirmation(interaction.user.id, scene)
+        view = DeleteConfirmation(interaction.user.id, scene)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         
         # Wait for confirmation
@@ -74,8 +74,8 @@ def register_clear_command(tree: app_commands.CommandTree):
                 result = await clear_user_inventory(internal_user_id, scene)
                 
                 success_embed = discord.Embed(
-                    title="✅ Inventory Cleared",
-                    description=f"Successfully cleared {target_text}.",
+                    title="✅ Inventory Deleted",
+                    description=f"Successfully deleted {target_text}.",
                     color=discord.Color.green()
                 )
                 
@@ -88,8 +88,8 @@ def register_clear_command(tree: app_commands.CommandTree):
                 )
                 
                 await interaction.edit_original_response(embed=success_embed, view=None)
-                logger.info(f"User {interaction.user.name} cleared {scene if scene else 'ALL'} inventory.")
+                logger.info(f"User {interaction.user.name} deleted {scene if scene else 'ALL'} inventory.")
                 
             except Exception as e:
-                logger.error(f"Failed to clear inventory for {interaction.user.name}: {e}")
+                logger.error(f"Failed to delete inventory for {interaction.user.name}: {e}")
                 await interaction.edit_original_response(content=f"❌ An error occurred: {e}", embed=None, view=None)
