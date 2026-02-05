@@ -1,19 +1,9 @@
-"""
-Main vision pipeline orchestrator.
-Coordinates image download, processing, and data extraction.
-"""
-
-import cv2
-import numpy as np
 import aiohttp
 from typing import Optional, Dict, Any, List
 from io import BytesIO
 from PIL import Image
 import logging
 
-from vision.grid_detector import GridDetector
-from vision.tile_parser import TileParser
-from vision.ocr import OCREngine
 from utils.image_hash import compute_image_hash
 from config import Config
 
@@ -21,13 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 class VisionPipeline:
-    """Main pipeline for processing puzzle screenshots."""
+    """Main pipeline for processing puzzle screenshots (Strict AI-Only)."""
     
     def __init__(self):
-        """Initialize vision pipeline components."""
-        self.grid_detector = GridDetector()
-        self.tile_parser = TileParser()
-        self.ocr = OCREngine()
+        """Initialize vision pipeline (AI Only)."""
+        pass
     
     async def process_image_url(self, image_url: str) -> Dict[str, Any]:
         """
@@ -56,63 +44,28 @@ class VisionPipeline:
             # Download image
             image_data = await self._download_image(image_url)
             
-            # Compute hash
+            # Compute hash (for deduplication)
             image_hash = compute_image_hash(image_data)
             result["image_hash"] = image_hash
             
-            # Convert to OpenCV format
-            image = self._bytes_to_cv2(image_data)
-            
-            # GOOGLE AI PRIMARY (Full AI Vision)
-            if Config.GOOGLE_API_KEY:
-                logger.info("Attempting full AI vision scan with Gemini 1.5 Flash...")
-                ai_data = await self._process_with_gemini(image_data)
-                
-                if ai_data:
-                    result["scene"] = ai_data.get("scene")
-                    result["pieces"] = ai_data.get("pieces", [])
-                    result["success"] = True
-                    logger.info(f"Full AI Scan Successful: {len(result['pieces'])} pieces found in '{result['scene']}'")
-                    return result
-                    
-            # LOCAL PROCESSING FALLBACK
-            logger.info("Proceeding with local vision pipeline fallback...")
-            
-            # Extract scene name
-            header_region = self.grid_detector.get_header_region(image)
-            scene = self.ocr.extract_scene_title(header_region)
-            if not scene or len(scene) < 3:
-                scene = self.ocr.extract_scene_title(image)
-            result["scene"] = scene
-            
-            # Multi-Pass Grid Detection
-            tiles = self.grid_detector.detect_tiles_multi_pass(image)
-            if not tiles:
-                from vision.grid_detector import detect_grid_alternative
-                tiles = detect_grid_alternative(image)
-                
-            if not tiles:
-                result["error"] = "No tiles detected in image (Local Fallback)"
+            # STRICT AI-ONLY SCANNING (Gemini 3 Flash)
+            if not Config.GOOGLE_API_KEY:
+                result["error"] = "STRICT AI VISION REQUIRED: Please set GOOGLE_API_KEY in .env to use Gemini 3 Flash scanning."
+                logger.error("Scan failed: GOOGLE_API_KEY missing in strict AI mode.")
                 return result
+
+            logger.info("Executing strict AI vision scan with Gemini 3 Flash...")
+            ai_data = await self._process_with_gemini(image_data)
             
-            # Parse each tile
-            pieces = []
-            for slot_index, tile_bbox in enumerate(tiles, start=1):
-                tile_image = self.grid_detector.extract_tile_image(image, tile_bbox)
-                tile_data = self.tile_parser.parse_tile(tile_image)
+            if ai_data:
+                result["scene"] = ai_data.get("scene")
+                result["pieces"] = ai_data.get("pieces", [])
+                result["success"] = True
+                logger.info(f"AI Scan Successful: {len(result['pieces'])} pieces found in '{result['scene']}'")
+            else:
+                result["error"] = "AI Vision failed to extract data. Please ensure the image is a clear Whiteout Survival screenshot."
+                logger.error("Gemini AI extraction failed.")
                 
-                if tile_data["stars"] > 0 or tile_data["confidence"] > 0.4:
-                    pieces.append({
-                        "slot_index": slot_index,
-                        "stars": tile_data["stars"],
-                        "duplicates": tile_data["duplicates"],
-                        "confidence": tile_data["confidence"]
-                    })
-            
-            result["pieces"] = pieces
-            result["success"] = True
-            logger.info(f"Local Fallback Scan: {len(pieces)} pieces found, scene={scene}")
-            
         except Exception as e:
             logger.error(f"Vision pipeline failed: {e}", exc_info=True)
             result["error"] = str(e)
@@ -122,14 +75,15 @@ class VisionPipeline:
     async def _process_with_gemini(self, image_data: bytes) -> Optional[Dict[str, Any]]:
         """
         Use Google Gemini 3 Flash to extract the scene name and piece data.
-        Uses the new google-genai SDK.
+        Uses the new google-genai SDK (Async).
         """
         try:
             import json
             import google.genai as genai
             from google.genai import types
             
-            client = genai.Client(api_key=Config.GOOGLE_API_KEY)
+            # Using the async client
+            client = genai.Client(api_key=Config.GOOGLE_API_KEY, http_options={'api_version': 'v1alpha'})
             
             prompt = (
                 "This is a screenshot from a puzzle game called 'Whiteout Survival'. "
@@ -150,8 +104,8 @@ class VisionPipeline:
                 "Respond ONLY with the JSON block. No markdown markers."
             )
             
-            # Efficient image passing in new SDK
-            response = client.models.generate_content(
+            # Use client.aio for true async support
+            response = await client.aio.models.generate_content(
                 model='gemini-3-flash',
                 contents=[
                     prompt,
@@ -160,6 +114,7 @@ class VisionPipeline:
             )
             
             text = response.text.strip()
+            logger.debug(f"Gemini raw response: {text}")
             
             # Remove markdown markers if present
             if text.startswith("```json"):
@@ -177,7 +132,7 @@ class VisionPipeline:
             return data
             
         except Exception as e:
-            logger.error(f"Gemini API (google-genai) failed: {e}")
+            logger.error(f"Gemini API (google-genai async) failed: {e}")
             return None
     
     async def _download_image(self, url: str) -> bytes:
@@ -197,104 +152,6 @@ class VisionPipeline:
                 
                 return await response.read()
     
-    def _bytes_to_cv2(self, image_data: bytes) -> np.ndarray:
-        """
-        Convert image bytes to OpenCV format.
-        
-        Args:
-            image_data: Raw image bytes
-            
-        Returns:
-            OpenCV image (BGR format)
-        """
-        # Load with PIL
-        pil_image = Image.open(BytesIO(image_data))
-        
-        # Convert to RGB (PIL uses RGB, OpenCV uses BGR)
-        pil_image = pil_image.convert('RGB')
-        
-        # Convert to numpy array
-        image_array = np.array(pil_image)
-        
-        # Convert RGB to BGR for OpenCV
-        image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-        
-        return image_bgr
-    
-    def process_image_bytes(self, image_data: bytes) -> Dict[str, Any]:
-        """
-        Process image from bytes (synchronous version).
-        
-        Args:
-            image_data: Raw image bytes
-            
-        Returns:
-            Same format as process_image_url
-        """
-        result = {
-            "success": False,
-            "image_hash": None,
-            "scene": None,
-            "pieces": [],
-            "error": None
-        }
-        
-        try:
-            # Compute hash
-            image_hash = compute_image_hash(image_data)
-            result["image_hash"] = image_hash
-            
-            # Convert to OpenCV format
-            image = self._bytes_to_cv2(image_data)
-            
-            # Extract scene name using Multi-Pass OCR
-            header_region = self.grid_detector.get_header_region(image)
-            scene = self.ocr.extract_scene_title(header_region)
-            
-            # Fallback for scene name: Try full image if header crop failed
-            if not scene:
-                scene = self.ocr.extract_scene_title(image)
-                
-            # Note: Gemini fallback is not implemented in sync process_image_bytes
-            # since the Gemini API is async. Use process_image_url for premium results.
-            
-            result["scene"] = scene
-            
-            # Multi-Pass Grid Detection
-            tiles = self.grid_detector.detect_tiles_multi_pass(image)
-            
-            if not tiles:
-                # Last resort fallback: simple detection
-                from vision.grid_detector import detect_grid_alternative
-                tiles = detect_grid_alternative(image)
-                
-            if not tiles:
-                result["error"] = "No tiles detected in image"
-                return result
-            
-            # Parse each tile
-            pieces = []
-            for slot_index, tile_bbox in enumerate(tiles, start=1):
-                tile_image = self.grid_detector.extract_tile_image(image, tile_bbox)
-                tile_data = self.tile_parser.parse_tile(tile_image)
-                
-                if tile_data["stars"] > 0 or tile_data["confidence"] > 0.4:
-                    pieces.append({
-                        "slot_index": slot_index,
-                        "stars": tile_data["stars"],
-                        "duplicates": tile_data["duplicates"],
-                        "confidence": tile_data["confidence"]
-                    })
-            
-            result["pieces"] = pieces
-            result["success"] = True
-            
-        except Exception as e:
-            logger.error(f"Vision pipeline failed: {e}", exc_info=True)
-            result["error"] = str(e)
-        
-        return result
-
 
 async def process_multiple_images(image_urls: List[str]) -> List[Dict[str, Any]]:
     """

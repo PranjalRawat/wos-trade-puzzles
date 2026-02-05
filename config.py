@@ -42,6 +42,11 @@ class Config:
         """Validate required configuration."""
         if not cls.DISCORD_TOKEN:
             raise ValueError("DISCORD_TOKEN is required. Set it in .env file.")
+        
+        if not cls.GOOGLE_API_KEY:
+            raise ValueError("GOOGLE_API_KEY is required for High-Quality AI Scanning. Set it in .env file.")
+        
+        logging.info(f"GOOGLE_API_KEY found (starts with: {cls.GOOGLE_API_KEY[:4]}...)")
     
     @classmethod
     def setup_logging(cls) -> None:
