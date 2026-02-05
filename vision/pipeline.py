@@ -14,12 +14,8 @@ import logging
 from vision.grid_detector import GridDetector
 from vision.tile_parser import TileParser
 from vision.ocr import OCREngine
-from utils.image_hash import compute_image_hash
-
 import google.generativeai as genai
 from config import Config
-from vision.constants import KNOWN_SCENES
-from rapidfuzz import process, fuzz
 
 logger = logging.getLogger(__name__)
 
@@ -67,40 +63,36 @@ class VisionPipeline:
             # Convert to OpenCV format
             image = self._bytes_to_cv2(image_data)
             
-            # Extract scene name using Multi-Pass OCR
+            # GOOGLE AI PRIMARY (Full AI Vision)
+            if Config.GOOGLE_API_KEY:
+                logger.info("Attempting full AI vision scan with Gemini 1.5 Flash...")
+                ai_data = await self._process_with_gemini(image_data)
+                
+                if ai_data:
+                    result["scene"] = ai_data.get("scene")
+                    result["pieces"] = ai_data.get("pieces", [])
+                    result["success"] = True
+                    logger.info(f"Full AI Scan Successful: {len(result['pieces'])} pieces found in '{result['scene']}'")
+                    return result
+                    
+            # LOCAL PROCESSING FALLBACK
+            logger.info("Proceeding with local vision pipeline fallback...")
+            
+            # Extract scene name
             header_region = self.grid_detector.get_header_region(image)
             scene = self.ocr.extract_scene_title(header_region)
-            
-            # Fallback for scene name: Try full image if header crop failed
-            if not scene:
+            if not scene or len(scene) < 3:
                 scene = self.ocr.extract_scene_title(image)
-            
-            # GOOGLE AI FALLBACK (Premium Vision)
-            # If scene is still missing or looks like garbage, try Gemini Vision if API key is present
-            if Config.GOOGLE_API_KEY and (not scene or len(scene) < 3 or any(c in scene for c in "——=€{")):
-                logger.info("Local OCR failed or returned garbage, attempting Gemini Vision fallback...")
-                gemini_scene = await self._process_with_gemini(image_data)
-                if gemini_scene:
-                    # Apply fuzzy matching to Gemini result as well to ensure normalization
-                    match = process.extractOne(gemini_scene, KNOWN_SCENES, scorer=fuzz.WRatio)
-                    if match and match[1] > 70:
-                        scene = match[0]
-                    else:
-                        scene = gemini_scene
-                    logger.info(f"Gemini Vision recovered scene: {scene}")
-                
             result["scene"] = scene
             
             # Multi-Pass Grid Detection
             tiles = self.grid_detector.detect_tiles_multi_pass(image)
-            
             if not tiles:
-                # Last resort fallback: simple detection
                 from vision.grid_detector import detect_grid_alternative
                 tiles = detect_grid_alternative(image)
                 
             if not tiles:
-                result["error"] = "No tiles detected in image"
+                result["error"] = "No tiles detected in image (Local Fallback)"
                 return result
             
             # Parse each tile
@@ -109,9 +101,6 @@ class VisionPipeline:
                 tile_image = self.grid_detector.extract_tile_image(image, tile_bbox)
                 tile_data = self.tile_parser.parse_tile(tile_image)
                 
-                # Confidence-based inclusion
-                # If we see stars, it's definitely a piece. 
-                # If no stars but high confidence, we still take it (might be missing/empty)
                 if tile_data["stars"] > 0 or tile_data["confidence"] > 0.4:
                     pieces.append({
                         "slot_index": slot_index,
@@ -122,8 +111,7 @@ class VisionPipeline:
             
             result["pieces"] = pieces
             result["success"] = True
-            
-            logger.info(f"Processed image (Multi-Pass + Gemini): {len(pieces)} pieces found, scene={scene}")
+            logger.info(f"Local Fallback Scan: {len(pieces)} pieces found, scene={scene}")
             
         except Exception as e:
             logger.error(f"Vision pipeline failed: {e}", exc_info=True)
@@ -131,36 +119,58 @@ class VisionPipeline:
         
         return result
 
-    async def _process_with_gemini(self, image_data: bytes) -> Optional[str]:
+    async def _process_with_gemini(self, image_data: bytes) -> Optional[Dict[str, Any]]:
         """
-        Use Google Gemini 1.5 Flash to extract the scene name.
+        Use Google Gemini 1.5 Flash to extract the scene name and piece data.
         Requires GOOGLE_API_KEY in .env.
         """
         try:
+            import json
             genai.configure(api_key=Config.GOOGLE_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3-flash')
             
             # Convert bytes to PIL Image for Gemini
             pil_img = Image.open(BytesIO(image_data))
             
             prompt = (
-                "This is a screenshot from a puzzle game. "
-                "Look at the header area and tell me the name of the 'Scene'. "
-                "Respond ONLY with the scene name, no extra text. "
-                "Example: 'Honor and Glory', 'Rekindled Flames'."
+                "This is a screenshot from a puzzle game called 'Whiteout Survival'. "
+                "The image shows a 3x4 grid of puzzle tiles. "
+                "Please analyze the image and return a JSON object with the following structure: "
+                "{\n"
+                "  \"scene\": \"The name of the scene from the top header\",\n"
+                "  \"pieces\": [\n"
+                "    { \"slot_index\": 1, \"stars\": 1, \"duplicates\": 0 },\n"
+                "    ...\n"
+                "  ]\n"
+                "}\n"
+                "Rules:\n"
+                "1. 'scene' is the title text at the top (e.g., 'Honor and Glory').\n"
+                "2. There are exactly 12 slots (indexed 1 to 12). Only include slots that are visible and owned.\n"
+                "3. 'stars' is the count of yellow stars (1-5). Use 1 if only the slot is visible but no stars are clear.\n"
+                "4. 'duplicates' is the number in the green badge (if any). Default to 0.\n"
+                "Respond ONLY with the JSON block. No markdown markers."
             )
             
             response = model.generate_content([prompt, pil_img])
             text = response.text.strip()
             
-            # Basic cleanup
-            if ":" in text:
-                text = text.split(":")[-1].strip()
+            # Remove markdown markers if present
+            if text.startswith("```json"):
+                text = text.replace("```json", "").replace("```", "").strip()
+            elif text.startswith("```"):
+                text = text.replace("```", "").strip()
+                
+            data = json.loads(text)
             
-            return text if len(text) > 2 else None
+            # Ensure basic structure
+            if "scene" not in data or "pieces" not in data:
+                logger.warning("Gemini JSON missing required fields")
+                return None
+                
+            return data
             
         except Exception as e:
-            logger.error(f"Gemini API call failed: {e}")
+            logger.error(f"Gemini API call or parsing failed: {e}")
             return None
     
     async def _download_image(self, url: str) -> bytes:

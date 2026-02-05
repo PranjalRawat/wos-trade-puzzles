@@ -9,9 +9,6 @@ import pytesseract
 from typing import Optional
 import logging
 
-from rapidfuzz import process, fuzz
-from vision.constants import KNOWN_SCENES
-
 logger = logging.getLogger(__name__)
 
 
@@ -85,24 +82,10 @@ class OCREngine:
                         best_titles.append(candidates[0])
             
             if best_titles:
-                # Pick the first successful result
-                raw_title = best_titles[0]
-                
-                # Apply fuzzy matching against known scenes
-                # This helps correct "A ——=—=€2=2{Tee" into "Honor and Glory"
-                match_result = process.extractOne(
-                    raw_title, 
-                    KNOWN_SCENES, 
-                    scorer=fuzz.WRatio
-                )
-                
-                if match_result and match_result[1] > 60:
-                    normalized_name = match_result[0]
-                    logger.info(f"Fuzzy matched '{raw_title}' to '{normalized_name}' (score: {match_result[1]})")
-                    return normalized_name
-                
-                logger.info(f"Detected scene title (OCR only): {raw_title}")
-                return raw_title
+                # Return the first successful result
+                result = best_titles[0]
+                logger.info(f"Detected scene title (Local OCR): {result}")
+                return result
             
             logger.warning("No scene title text detected after all passes")
             return None
