@@ -526,3 +526,68 @@ async def record_image_hash(user_id: int, image_hash: str) -> None:
             "INSERT INTO image_hashes (hash, first_seen_by) VALUES (?, ?)",
             (image_hash, user_id)
         )
+async def clear_user_inventory(user_id: int, scene: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Clear user's inventory and associated history.
+    
+    Args:
+        user_id: Internal user ID
+        scene: Optional scene filter
+        
+    Returns:
+        Summary of what was deleted
+    """
+    db = await get_database()
+    result = {"inventory_deleted": 0, "scans_deleted": 0}
+    
+    if scene:
+        scene = normalize_scene_name(scene)
+        
+        # 1. Get scan IDs for this scene to clear hashes
+        scan_rows = await db.fetchall(
+            "SELECT id, image_hash FROM scan_history WHERE user_id = ? AND scene = ?",
+            (user_id, scene)
+        )
+        scan_ids = [row[0] for row in scan_rows]
+        image_hashes = [row[1] for row in scan_rows]
+        
+        # 2. Delete inventory records
+        cursor = await db.execute(
+            "DELETE FROM inventory WHERE user_id = ? AND scene = ?",
+            (user_id, scene)
+        )
+        result["inventory_deleted"] = cursor.rowcount
+        
+        # 3. Delete scan history (scan_details cascades)
+        cursor = await db.execute(
+            "DELETE FROM scan_history WHERE user_id = ? AND scene = ?",
+            (user_id, scene)
+        )
+        result["scans_deleted"] = cursor.rowcount
+        
+        # 4. Clean up associated image hashes
+        if image_hashes:
+            placeholders = ", ".join(["?"] * len(image_hashes))
+            await db.execute(
+                f"DELETE FROM image_hashes WHERE hash IN ({placeholders})",
+                tuple(image_hashes)
+            )
+            
+        logger.info(f"Cleared scene inventory: user={user_id}, scene={scene}, deleted_items={result['inventory_deleted']}")
+        
+    else:
+        # Full Reset
+        # 1. Delete inventory
+        cursor = await db.execute("DELETE FROM inventory WHERE user_id = ?", (user_id,))
+        result["inventory_deleted"] = cursor.rowcount
+        
+        # 2. Delete hashes (where this user was the first to see them)
+        await db.execute("DELETE FROM image_hashes WHERE first_seen_by = ?", (user_id,))
+        
+        # 3. Delete scan history (scan_details cascades)
+        cursor = await db.execute("DELETE FROM scan_history WHERE user_id = ?", (user_id,))
+        result["scans_deleted"] = cursor.rowcount
+        
+        logger.info(f"Full inventory reset: user={user_id}, deleted_items={result['inventory_deleted']}")
+        
+    return result

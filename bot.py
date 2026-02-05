@@ -20,6 +20,7 @@ from bot.commands.used import register_used_command
 from bot.commands.fix import register_fix_command
 from bot.commands.history import register_history_command
 from bot.commands.unscan import register_unscan_command
+from bot.commands.clear import register_clear_command
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ async def main():
     register_fix_command(bot.tree)
     register_history_command(bot.tree)
     register_unscan_command(bot.tree)
+    register_clear_command(bot.tree)
     
     logger.info("Commands registered")
     
