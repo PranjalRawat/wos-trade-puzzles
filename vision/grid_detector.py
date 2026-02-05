@@ -83,20 +83,50 @@ class GridDetector:
             return []
             
         # Refine: Keep only tiles that are similar in size to the median tile
-        # This helps exclude small UI icons or large layout boxes
+        # Loosened range (0.5 to 2.0) to handle perspective distortion or varied tile sizes
         areas = [w * h for x, y, w, h in potential_tiles]
         median_area = np.median(areas)
         
         tiles = []
         for tile in potential_tiles:
             tile_area = tile[2] * tile[3]
-            if 0.7 * median_area <= tile_area <= 1.3 * median_area:
+            if 0.5 * median_area <= tile_area <= 2.0 * median_area:
                 tiles.append(tile)
         
         # Sort tiles: top-to-bottom, left-to-right
         tiles = self._sort_tiles(tiles)
         
-        logger.info(f"Detected {len(tiles)} tiles after filtering outliers")
+        logger.info(f"Detected {len(tiles)} tiles (potential: {len(potential_tiles)})")
+        return tiles
+
+    def detect_tiles_multi_pass(self, image: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        """
+        Detect tiles using multiple strategies:
+        1. Try Board Isolation + Tiles
+        2. Fallback to Full Image + Tiles
+        3. Try different thresholding parameters if count < 9
+        """
+        # Strategy 1: Board Isolation
+        board_bbox = self.detect_puzzle_board(image)
+        if board_bbox:
+            bx, by, bw, bh = board_bbox
+            board_img = image[by:by+bh, bx:bx+bw]
+            tiles = self.detect_tiles(board_img)
+            # Adjust back to full space
+            tiles = [(tx + bx, ty + by, tw, th) for tx, ty, tw, th in tiles]
+            
+            # If we found at least 9 tiles, we're likely good
+            if len(tiles) >= 9:
+                return tiles
+            logger.info(f"Board pass only found {len(tiles)} tiles, trying full image...")
+            
+        # Strategy 2: Full Image
+        tiles = self.detect_tiles(image)
+        if len(tiles) >= 9:
+            return tiles
+            
+        # Strategy 3: More Aggressive Thresholding (Internal retry in detect_tiles?)
+        # For now, we just return the best we found
         return tiles
 
     def detect_puzzle_board(self, image: np.ndarray) -> Optional[Tuple[int, int, int, int]]:

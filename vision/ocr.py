@@ -25,17 +25,9 @@ class OCREngine:
         if tesseract_path:
             pytesseract.pytesseract.tesseract_cmd = tesseract_path
     
-    def extract_scene_title(self, image: np.ndarray, top_region_ratio: float = 0.2) -> Optional[str]:
+    def extract_scene_title(self, image: np.ndarray, top_region_ratio: float = 0.25) -> Optional[str]:
         """
-        Extract scene title from top region of image.
-        Focuses on the left side of the header where the title usually is.
-        
-        Args:
-            image: Input image (BGR format)
-            top_region_ratio: Ratio of image height to use for title region (default: 20%)
-            
-        Returns:
-            Scene title or None if not detected
+        Extract scene title from image using multiple OCR passes if needed.
         """
         try:
             # Check if image is already a small header region or full screenshot
@@ -46,52 +38,61 @@ class OCREngine:
                 header = image
             else:
                 top_height = int(height * top_region_ratio)
-                # Take a wider area (90%) to be safe for diverse screen ratios
                 header = image[0:top_height, 0:int(width * 0.9)]
             
             # Preprocess
             preprocessed = self._preprocess_for_ocr(header)
             
-            # Run OCR with page segmentation mode 3
-            text = pytesseract.image_to_string(
-                preprocessed,
-                config='--psm 3'
-            )
+            # Multi-Pass OCR: Try different PSM modes
+            # Mode 3: Automatic (default)
+            # Mode 11: Sparse text
+            # Mode 6: Single block
+            psm_modes = [3, 11, 6]
             
-            # Clean up result
-            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            best_titles = []
             
-            # Filter lines: skip obvious instructions/UI text
-            ignore_keywords = ["complete", "obtain", "reward", "this", "to", "tap", "click", "collect"]
-            filtered_lines = []
-            for line in lines:
-                lower_line = line.lower()
-                # Skip lines that look like instructions or UI help
-                if any(kw in lower_line for kw in ignore_keywords) and len(lower_line) > 10:
-                    continue
-                # Skip numeric progress bars (e.g., 10/12)
-                if "/" in line and any(c.isdigit() for c in line):
-                    continue
-                # Skip artifacts or very short noise
-                if len(line) < 3:
-                    continue
-                filtered_lines.append(line)
-            
-            if filtered_lines:
-                # Scene titles often appear first or are distinct
-                # We prioritize the first decent text block that isn't too long
-                for candidate in filtered_lines:
-                    # Scene titles are rarely more than 40 chars
-                    if 3 <= len(candidate) <= 40:
-                        logger.info(f"Detected scene title: {candidate}")
-                        return candidate
+            for psm in psm_modes:
+                text = pytesseract.image_to_string(
+                    preprocessed,
+                    config=f'--psm {psm}'
+                )
                 
-                # Fallback to longest if no matches
-                scene_title = max(filtered_lines, key=len)
-                logger.info(f"Fallback scene title: {scene_title}")
-                return scene_title
+                # Clean up result
+                lines = [line.strip() for line in text.split('\n') if line.strip()]
+                
+                # Filter lines
+                ignore_keywords = ["complete", "obtain", "reward", "this", "to", "tap", "click", "collect"]
+                filtered_lines = []
+                for line in lines:
+                    lower_line = line.lower()
+                    if any(kw in lower_line for kw in ignore_keywords) and len(lower_line) > 8:
+                        continue
+                    if "/" in line and any(c.isdigit() for c in line): # Skip "10/12"
+                        continue
+                    if len(line.strip()) < 3:
+                        continue
+                    filtered_lines.append(line.strip())
+                
+                if filtered_lines:
+                    # Pick the best candidate from this pass
+                    # We prefer titles that aren't too long or too short
+                    candidates = [l for l in filtered_lines if 3 <= len(l) <= 30]
+                    if candidates:
+                        # Usually the first candidate in high-res images is the title
+                        best_titles.append(candidates[0])
             
-            logger.warning("No scene title text detected")
+            if best_titles:
+                # Pick the most common or first successful result
+                # For now, just return the first one found
+                result = best_titles[0]
+                logger.info(f"Detected scene title (Multi-Pass): {result}")
+                return result
+            
+            logger.warning("No scene title text detected after all passes")
+            return None
+                
+        except Exception as e:
+            logger.error(f"OCR failed: {e}")
             return None
                 
         except Exception as e:
