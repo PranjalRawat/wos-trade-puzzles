@@ -83,7 +83,7 @@ class VisionPipeline:
             from google.genai import types
             
             # Using the async client
-            client = genai.Client(api_key=Config.GOOGLE_API_KEY, http_options={'api_version': 'v1alpha'})
+            client = genai.Client(api_key=Config.GOOGLE_API_KEY)
             
             prompt = (
                 "This is a screenshot from a puzzle game called 'Whiteout Survival'. "
@@ -106,7 +106,7 @@ class VisionPipeline:
             
             # Use client.aio for true async support
             response = await client.aio.models.generate_content(
-                model='gemini-3-flash',
+                model='gemini-3-flash-preview',
                 contents=[
                     prompt,
                     types.Part.from_bytes(data=image_data, mime_type='image/png')
