@@ -4,11 +4,10 @@
 
 import discord
 from discord import app_commands
-from typing import Optional
+from typing import List, Optional
 import logging
 
 from inventory.queries import get_or_create_user, get_piece, add_piece, update_duplicates, get_all_scenes
-from typing import List, Optional
 from inventory.rules import validate_piece_data, normalize_scene_name, ValidationError
 from utils.validation import parse_slot_index
 

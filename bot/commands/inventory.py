@@ -4,7 +4,7 @@
 
 import discord
 from discord import app_commands
-from typing import Optional
+from typing import Optional, List
 import logging
 
 from inventory.queries import get_or_create_user, get_user_inventory, get_all_scenes

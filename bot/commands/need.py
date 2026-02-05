@@ -5,6 +5,7 @@
 import discord
 from discord import app_commands
 import logging
+from typing import List
 
 from inventory.queries import get_or_create_user, get_missing_pieces, get_all_scenes
 from inventory.rules import normalize_scene_name

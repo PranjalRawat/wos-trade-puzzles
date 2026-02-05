@@ -5,9 +5,9 @@
 import discord
 from discord import app_commands
 import logging
+from typing import List
 
 from inventory.queries import get_or_create_user, get_piece, update_duplicates, get_all_scenes
-from typing import List
 from inventory.rules import normalize_scene_name
 from utils.validation import parse_slot_index
 
