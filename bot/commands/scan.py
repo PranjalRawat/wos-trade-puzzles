@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import logging
 import asyncio
 
-from inventory.queries import get_or_create_user, record_scan, check_image_hash, record_image_hash
+from inventory.queries import get_or_create_user, record_scan, check_image_hash, record_image_hash, record_scan_detail
 from inventory.merge import merge_scan_results, apply_merge_result
 from vision.pipeline import VisionPipeline
 from inventory.rules import normalize_scene_name
@@ -106,21 +106,13 @@ def register_scan_command(tree: app_commands.CommandTree):
             scenes_found = set()
             
             for attachment in image_attachments:
-                # Check if already scanned
-                # First, we need to download to compute hash
+                # Compute hash (still used for internal audit and batch deduplication)
                 image_data = await attachment.read()
                 from utils.image_hash import compute_image_hash
                 image_hash = compute_image_hash(image_data)
                 
-                existing_hash = await check_image_hash(image_hash)
-                if existing_hash:
-                    logger.info(f"Skipping duplicate image (hash: {image_hash})")
-                    skipped_count += 1
-                    await record_scan(
-                        user_id, image_hash, attachment.filename, None, 0, 0, 0, 'skipped',
-                        f"Duplicate image (first seen by {existing_hash['first_seen_by']})"
-                    )
-                    continue
+                # Record hash if new
+                await record_image_hash(user_id, image_hash)
                 
                 # Process image
                 result = await pipeline.process_image_url(attachment.url)
@@ -129,7 +121,7 @@ def register_scan_command(tree: app_commands.CommandTree):
                     logger.error(f"Failed to process image: {result['error']}")
                     failed_count += 1
                     await record_scan(
-                        user_id, image_hash, attachment.filename, None, 0, 0, 0, 'failed',
+                        user_id, image_hash, attachment.filename, None, 0, 0, 0, 0, 'failed',
                         result['error']
                     )
                     continue
@@ -153,7 +145,7 @@ def register_scan_command(tree: app_commands.CommandTree):
             
             # Check if we got any pieces
             if not all_pieces:
-                await processing_msg.edit(content=f"❌ No pieces detected. Skipped: {skipped_count}, Failed: {failed_count}")
+                await processing_msg.edit(content=f"❌ No pieces detected. Failed: {failed_count}")
                 return
             
             # Merge with existing inventory
@@ -192,13 +184,6 @@ def register_scan_command(tree: app_commands.CommandTree):
                     name=f"⚠️ Conflicts ({len(merge_result.conflicts)})",
                     value="Some scanned values are lower than stored. Review below.",
                     inline=False
-                )
-            
-            if skipped_count > 0:
-                summary_embed.add_field(
-                    name="⏭️ Skipped",
-                    value=f"{skipped_count} duplicate images",
-                    inline=True
                 )
             
             if failed_count > 0:
@@ -245,11 +230,20 @@ def register_scan_command(tree: app_commands.CommandTree):
                         
                         # Record successful scans
                         for scan in successful_scans:
-                            await record_scan(
+                            scan_id = await record_scan(
                                 user_id, scan["hash"], scan["filename"], scan["scene"],
                                 scan["num_pieces"], len(merge_result.added),
                                 len(merge_result.updated), 0, 'partial'
                             )
+                            
+                            # Record details for rollback
+                            for piece in merge_result.added:
+                                if piece["scene"] == scan["scene"]:
+                                    await record_scan_detail(scan_id, piece["scene"], piece["slot_index"], piece["duplicates"])
+                            for piece in merge_result.updated:
+                                if piece["scene"] == scan["scene"]:
+                                    diff = piece["new_duplicates"] - piece["old_duplicates"]
+                                    await record_scan_detail(scan_id, piece["scene"], piece["slot_index"], diff)
                         
                         await interaction.followup.send("✅ Applied non-conflicting changes. Use `/fix` to correct conflicts manually.")
                     else:
@@ -281,11 +275,20 @@ def register_scan_command(tree: app_commands.CommandTree):
                         
                         # Record successful scans
                         for scan in successful_scans:
-                            await record_scan(
+                            scan_id = await record_scan(
                                 user_id, scan["hash"], scan["filename"], scan["scene"],
                                 scan["num_pieces"], len(merge_result.added),
                                 len(merge_result.updated), 0, 'success'
                             )
+                            
+                            # Record details for rollback
+                            for piece in merge_result.added:
+                                if piece["scene"] == scan["scene"]:
+                                    await record_scan_detail(scan_id, piece["scene"], piece["slot_index"], piece["duplicates"])
+                            for piece in merge_result.updated:
+                                if piece["scene"] == scan["scene"]:
+                                    diff = piece["new_duplicates"] - piece["old_duplicates"]
+                                    await record_scan_detail(scan_id, piece["scene"], piece["slot_index"], diff)
                         
                         await interaction.followup.send("✅ Inventory updated successfully!")
                     else:

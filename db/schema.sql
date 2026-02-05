@@ -62,3 +62,16 @@ CREATE TABLE IF NOT EXISTS image_hashes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_hashes_hash ON image_hashes(hash);
+
+-- Scan details: Tracks exactly what each scan did
+-- Required for /unscan rollback functionality
+CREATE TABLE IF NOT EXISTS scan_details (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL,
+    scene TEXT NOT NULL,
+    slot_index INTEGER NOT NULL,
+    added_duplicates INTEGER DEFAULT 0,
+    FOREIGN KEY (scan_id) REFERENCES scan_history(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_details_scan ON scan_details(scan_id);

@@ -7,7 +7,8 @@ from discord import app_commands
 from typing import Optional
 import logging
 
-from inventory.queries import get_or_create_user, get_piece, add_piece, update_duplicates
+from inventory.queries import get_or_create_user, get_piece, add_piece, update_duplicates, get_all_scenes
+from typing import List, Optional
 from inventory.rules import validate_piece_data, normalize_scene_name, ValidationError
 from utils.validation import parse_slot_index
 
@@ -127,7 +128,19 @@ def register_fix_command(tree: app_commands.CommandTree):
                         "❌ Please specify what to update (`stars` or `duplicates`).",
                         ephemeral=True
                     )
+                    logger.info(f"User {interaction.user} fixed piece: {scene} slot {slot_index}")
             
         except Exception as e:
             logger.error(f"Fix command failed: {e}", exc_info=True)
             await interaction.followup.send(f"❌ An error occurred: {str(e)}", ephemeral=True)
+
+    @fix_command.autocomplete("scene")
+    async def scene_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> List[app_commands.Choice[str]]:
+        scenes = await get_all_scenes()
+        return [
+            app_commands.Choice(name=s, value=s)
+            for s in scenes if current.lower() in s.lower()
+        ][:25]

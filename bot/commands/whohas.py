@@ -5,8 +5,9 @@
 import discord
 from discord import app_commands
 import logging
+from typing import List
 
-from inventory.queries import who_has_piece
+from inventory.queries import get_or_create_user, who_has_piece, get_all_scenes
 from inventory.rules import normalize_scene_name
 from utils.validation import parse_slot_index
 
@@ -77,8 +78,19 @@ def register_whohas_command(tree: app_commands.CommandTree):
             embed.set_footer(text="Contact these users in-game to arrange a trade!")
             
             await interaction.followup.send(embed=embed)
-            logger.info(f"User {interaction.user} searched for {scene} slot {slot_index}")
+            logger.info(f"User {interaction.user} checked who has {scene} slot {slot_index}")
             
         except Exception as e:
             logger.error(f"Whohas command failed: {e}", exc_info=True)
             await interaction.followup.send(f"❌ An error occurred: {str(e)}", ephemeral=True)
+
+    @whohas_command.autocomplete("scene")
+    async def scene_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> List[app_commands.Choice[str]]:
+        scenes = await get_all_scenes()
+        return [
+            app_commands.Choice(name=s, value=s)
+            for s in scenes if current.lower() in s.lower()
+        ][:25]

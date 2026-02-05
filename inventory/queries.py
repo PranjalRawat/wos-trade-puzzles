@@ -327,7 +327,7 @@ async def record_scan(
     """
     db = await get_database()
     
-    await db.execute(
+    cursor = await db.execute(
         """
         INSERT INTO scan_history (
             user_id, image_hash, image_filename, scene, pieces_found, pieces_added,
@@ -338,6 +338,136 @@ async def record_scan(
         (user_id, image_hash, image_filename, scene, pieces_found, pieces_added,
          pieces_updated, conflicts_found, scan_status, error_message)
     )
+    
+    return cursor.lastrowid
+
+
+async def record_scan_detail(
+    scan_id: int,
+    scene: str,
+    slot_index: int,
+    added_duplicates: int
+) -> None:
+    """
+    Record exactly what a scan added/updated.
+    Used for /unscan rollback.
+    """
+    db = await get_database()
+    
+    await db.execute(
+        """
+        INSERT INTO scan_details (scan_id, scene, slot_index, added_duplicates)
+        VALUES (?, ?, ?, ?)
+        """,
+        (scan_id, scene, slot_index, added_duplicates)
+    )
+
+
+async def get_user_scan_history(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    """Get recent scan history for a user."""
+    db = await get_database()
+    
+    rows = await db.fetchall(
+        """
+        SELECT id, image_filename, scene, pieces_found, scan_status, scanned_at, image_hash
+        FROM scan_history
+        WHERE user_id = ?
+        ORDER BY scanned_at DESC
+        LIMIT ?
+        """,
+        (user_id, limit)
+    )
+    
+    return [
+        {
+            "id": row[0],
+            "filename": row[1],
+            "scene": row[2],
+            "pieces_found": row[3],
+            "status": row[4],
+            "at": row[5],
+            "hash": row[6]
+        }
+        for row in rows
+    ]
+
+
+async def delete_scan_and_rollback(user_id: int, scan_id: int) -> Dict[str, Any]:
+    """
+    Undo a specific scan.
+    - Subtracts the duplicates added by that scan.
+    - Deletes the scan history and details.
+    - Deletes the image hash to allow re-scanning.
+    """
+    db = await get_database()
+    
+    # 1. Get scan info
+    scan = await db.fetchone(
+        "SELECT image_hash, scan_status FROM scan_history WHERE id = ? AND user_id = ?",
+        (scan_id, user_id)
+    )
+    
+    if not scan:
+        return {"success": False, "error": "Scan not found"}
+    
+    image_hash, status = scan
+    
+    # 2. Get details (what to subtract)
+    details = await db.fetchall(
+        "SELECT scene, slot_index, added_duplicates FROM scan_details WHERE scan_id = ?",
+        (scan_id,)
+    )
+    
+    # 3. Rollback inventory
+    rolled_back_count = 0
+    for scene, slot, added in details:
+        if added > 0:
+            # We use MAX(0, current - added) to be safe
+            await db.execute(
+                """
+                UPDATE inventory 
+                SET duplicates = MAX(0, duplicates - ?), updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND scene = ? AND slot_index = ?
+                """,
+                (added, user_id, scene, slot)
+            )
+            rolled_back_count += 1
+            
+    # 4. Delete hash record
+    await db.execute("DELETE FROM image_hashes WHERE hash = ?", (image_hash,))
+    
+    # 5. Delete scan record (scan_details will cascade if foreign key is on)
+    await db.execute("DELETE FROM scan_history WHERE id = ?", (scan_id,))
+    
+    return {
+        "success": True, 
+        "rolled_back_pieces": rolled_back_count,
+        "hash_cleared": True
+    }
+
+
+async def get_latest_scan_for_scene(user_id: int, scene: str) -> Optional[int]:
+    """Find the ID of the latest successful scan for a specific scene."""
+    db = await get_database()
+    scene = normalize_scene_name(scene)
+    
+    row = await db.fetchone(
+        """
+        SELECT id FROM scan_history 
+        WHERE user_id = ? AND scene = ? AND scan_status IN ('success', 'partial')
+        ORDER BY scanned_at DESC LIMIT 1
+        """,
+        (user_id, scene)
+    )
+    
+    return row[0] if row else None
+
+
+async def get_all_scenes() -> List[str]:
+    """Get all unique scene names currently in the database."""
+    db = await get_database()
+    rows = await db.fetchall("SELECT DISTINCT scene FROM inventory ORDER BY scene")
+    return [row[0] for row in rows]
 
 
 async def check_image_hash(image_hash: str) -> Optional[Dict[str, Any]]:
