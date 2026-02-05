@@ -14,7 +14,7 @@ import logging
 from vision.grid_detector import GridDetector
 from vision.tile_parser import TileParser
 from vision.ocr import OCREngine
-import google.generativeai as genai
+from utils.image_hash import compute_image_hash
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -121,16 +121,15 @@ class VisionPipeline:
 
     async def _process_with_gemini(self, image_data: bytes) -> Optional[Dict[str, Any]]:
         """
-        Use Google Gemini 1.5 Flash to extract the scene name and piece data.
-        Requires GOOGLE_API_KEY in .env.
+        Use Google Gemini 3 Flash to extract the scene name and piece data.
+        Uses the new google-genai SDK.
         """
         try:
             import json
-            genai.configure(api_key=Config.GOOGLE_API_KEY)
-            model = genai.GenerativeModel('gemini-3-flash')
+            import google.genai as genai
+            from google.genai import types
             
-            # Convert bytes to PIL Image for Gemini
-            pil_img = Image.open(BytesIO(image_data))
+            client = genai.Client(api_key=Config.GOOGLE_API_KEY)
             
             prompt = (
                 "This is a screenshot from a puzzle game called 'Whiteout Survival'. "
@@ -151,7 +150,15 @@ class VisionPipeline:
                 "Respond ONLY with the JSON block. No markdown markers."
             )
             
-            response = model.generate_content([prompt, pil_img])
+            # Efficient image passing in new SDK
+            response = client.models.generate_content(
+                model='gemini-3-flash',
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_data, mime_type='image/png')
+                ]
+            )
+            
             text = response.text.strip()
             
             # Remove markdown markers if present
@@ -170,7 +177,7 @@ class VisionPipeline:
             return data
             
         except Exception as e:
-            logger.error(f"Gemini API call or parsing failed: {e}")
+            logger.error(f"Gemini API (google-genai) failed: {e}")
             return None
     
     async def _download_image(self, url: str) -> bytes:
