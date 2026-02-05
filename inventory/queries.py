@@ -205,7 +205,7 @@ async def who_has_piece(scene: str, slot_index: int) -> List[Dict[str, Any]]:
         SELECT u.discord_id, u.discord_username, i.duplicates, i.stars
         FROM inventory i
         JOIN users u ON i.user_id = u.id
-        WHERE i.scene = ? AND i.slot_index = ? AND i.duplicates > 0
+        WHERE i.scene = ? AND i.slot_index = ? AND i.duplicates > 0 AND i.stars < 5
         ORDER BY i.duplicates DESC
         """,
         (scene, slot_index)
@@ -296,6 +296,7 @@ async def get_missing_pieces(user_id: int, scene: str) -> List[Dict[str, Any]]:
 async def record_scan(
     user_id: int,
     image_hash: str,
+    image_filename: Optional[str],
     scene: Optional[str],
     pieces_found: int,
     pieces_added: int,
@@ -310,6 +311,7 @@ async def record_scan(
     Args:
         user_id: Internal user ID
         image_hash: Hash of the scanned image
+        image_filename: Filename of the scanned image
         scene: Scene name (if detected)
         pieces_found: Total pieces detected
         pieces_added: New pieces added
@@ -323,12 +325,12 @@ async def record_scan(
     await db.execute(
         """
         INSERT INTO scan_history (
-            user_id, image_hash, scene, pieces_found, pieces_added,
+            user_id, image_hash, image_filename, scene, pieces_found, pieces_added,
             pieces_updated, conflicts_found, scan_status, error_message
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, image_hash, scene, pieces_found, pieces_added,
+        (user_id, image_hash, image_filename, scene, pieces_found, pieces_added,
          pieces_updated, conflicts_found, scan_status, error_message)
     )
 

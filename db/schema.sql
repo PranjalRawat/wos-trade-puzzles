@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS scan_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     image_hash TEXT NOT NULL,
+    image_filename TEXT,
     scene TEXT,
     pieces_found INTEGER DEFAULT 0,
     pieces_added INTEGER DEFAULT 0,

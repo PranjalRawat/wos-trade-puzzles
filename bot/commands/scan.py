@@ -100,6 +100,7 @@ def register_scan_command(tree: app_commands.CommandTree):
             
             pipeline = VisionPipeline()
             all_pieces = []
+            successful_scans = [] # Store (hash, filename, scene, num_pieces) for recording later
             skipped_count = 0
             failed_count = 0
             scenes_found = set()
@@ -116,7 +117,7 @@ def register_scan_command(tree: app_commands.CommandTree):
                     logger.info(f"Skipping duplicate image (hash: {image_hash})")
                     skipped_count += 1
                     await record_scan(
-                        user_id, image_hash, None, 0, 0, 0, 0, 'skipped',
+                        user_id, image_hash, attachment.filename, None, 0, 0, 0, 'skipped',
                         f"Duplicate image (first seen by {existing_hash['first_seen_by']})"
                     )
                     continue
@@ -128,7 +129,7 @@ def register_scan_command(tree: app_commands.CommandTree):
                     logger.error(f"Failed to process image: {result['error']}")
                     failed_count += 1
                     await record_scan(
-                        user_id, image_hash, None, 0, 0, 0, 0, 'failed',
+                        user_id, image_hash, attachment.filename, None, 0, 0, 0, 'failed',
                         result['error']
                     )
                     continue
@@ -136,9 +137,15 @@ def register_scan_command(tree: app_commands.CommandTree):
                 # Record hash
                 await record_image_hash(user_id, image_hash)
                 
-                # Add pieces to batch
+                # Add to successful scans for later recording
                 scene = result["scene"] or "Unknown Scene"
                 scenes_found.add(scene)
+                successful_scans.append({
+                    "hash": image_hash,
+                    "filename": attachment.filename,
+                    "scene": scene,
+                    "num_pieces": len(result["pieces"])
+                })
                 
                 for piece in result["pieces"]:
                     piece["scene"] = scene
@@ -236,11 +243,11 @@ def register_scan_command(tree: app_commands.CommandTree):
                         merge_result.conflicts = []  # Clear conflicts
                         await apply_merge_result(user_id, merge_result)
                         
-                        # Record successful scan
-                        for scene in scenes_found:
+                        # Record successful scans
+                        for scan in successful_scans:
                             await record_scan(
-                                user_id, image_hash, scene,
-                                len(all_pieces), len(merge_result.added),
+                                user_id, scan["hash"], scan["filename"], scan["scene"],
+                                scan["num_pieces"], len(merge_result.added),
                                 len(merge_result.updated), 0, 'partial'
                             )
                         
@@ -272,11 +279,11 @@ def register_scan_command(tree: app_commands.CommandTree):
                     if str(reaction.emoji) == "✅":
                         await apply_merge_result(user_id, merge_result)
                         
-                        # Record successful scan
-                        for scene in scenes_found:
+                        # Record successful scans
+                        for scan in successful_scans:
                             await record_scan(
-                                user_id, image_hash, scene,
-                                len(all_pieces), len(merge_result.added),
+                                user_id, scan["hash"], scan["filename"], scan["scene"],
+                                scan["num_pieces"], len(merge_result.added),
                                 len(merge_result.updated), 0, 'success'
                             )
                         
