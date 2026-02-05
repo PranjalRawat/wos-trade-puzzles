@@ -14,16 +14,17 @@ logger = logging.getLogger(__name__)
 class GridDetector:
     """Detects grid layout in puzzle screenshots."""
     
-    def __init__(self, min_tile_area: int = 1000, max_tile_area: int = 50000):
+    def __init__(self, min_tile_area: int = 500, max_tile_area: int = 500000):
         """
         Initialize grid detector.
         
         Args:
-            min_tile_area: Minimum area for a valid tile (pixels)
-            max_tile_area: Maximum area for a valid tile (pixels)
+            min_tile_area: Minimum area for a valid tile (pixels) - Default low to catch tiny pieces
+            max_tile_area: Maximum area for a valid tile (pixels) - Default high for high-res screens
         """
         self.min_tile_area = min_tile_area
         self.max_tile_area = max_tile_area
+        self.board_bbox = None
     
     def detect_tiles(self, image: np.ndarray) -> List[Tuple[int, int, int, int]]:
         """
@@ -54,16 +55,27 @@ class GridDetector:
         
         # Filter and extract bounding boxes
         potential_tiles = []
+        height, width = image.shape[:2]
+        total_area = height * width
+        
+        # Dynamic area thresholds based on image size
+        # A tile should be at least ~0.5% and at most ~15% of the total area
+        img_min_area = total_area * 0.005 
+        img_max_area = total_area * 0.15
+        
+        # Use the most restrictive of fixed vs dynamic thresholds
+        actual_min_area = max(self.min_tile_area, img_min_area)
+        actual_max_area = min(self.max_tile_area, img_max_area)
+        
         for contour in contours:
             area = cv2.contourArea(contour)
             
-            # Filter by area (puzzle tiles are usually substantial)
-            if self.min_tile_area <= area <= self.max_tile_area:
+            if actual_min_area <= area <= actual_max_area:
                 x, y, w, h = cv2.boundingRect(contour)
                 
                 # Filter by aspect ratio (tiles should be nearly square)
                 aspect_ratio = w / h if h > 0 else 0
-                if 0.8 <= aspect_ratio <= 1.2:  # Tightened aspect ratio
+                if 0.7 <= aspect_ratio <= 1.4:  # Loosened aspect ratio
                     potential_tiles.append((x, y, w, h))
         
         if not potential_tiles:
@@ -86,6 +98,59 @@ class GridDetector:
         
         logger.info(f"Detected {len(tiles)} tiles after filtering outliers")
         return tiles
+
+    def detect_puzzle_board(self, image: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Identify the main puzzle board/parchment area.
+        This allows us to isolate tiles from title cards, buttons, etc.
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (11, 11), 0)
+        
+        # Use Canny to get strong edges
+        edges = cv2.Canny(blurred, 30, 150)
+        
+        # Dilate edges to close gaps
+        kernel = np.ones((5, 5), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+        
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        height, width = image.shape[:2]
+        img_area = height * width
+        
+        # We look for a large rectangular contour in the middle-ish of the screen
+        best_board = None
+        max_board_area = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            # A board should be at least 30% of the image area
+            if area > img_area * 0.3:
+                x, y, w, h = cv2.boundingRect(contour)
+                # Aspect ratio for a 3x3 or 3x4 grid is usually between 0.6 and 1.5
+                aspect = w / h if h > 0 else 0
+                if 0.5 <= aspect <= 1.8:
+                    if area > max_board_area:
+                        max_board_area = area
+                        best_board = (x, y, w, h)
+        
+        if best_board:
+            logger.info(f"Detected puzzle board at {best_board} (area: {max_board_area/img_area:.1%})")
+        return best_board
+
+    def get_header_region(self, image: np.ndarray) -> np.ndarray:
+        """
+        Isolate the top header card containing the scene name.
+        """
+        height, width = image.shape[:2]
+        # Usually occupies the top 25%
+        header_height = int(height * 0.25)
+        # Often slightly inset from edges
+        x_start = int(width * 0.05)
+        x_end = int(width * 0.95)
+        
+        return image[0:header_height, x_start:x_end]
     
     def _sort_tiles(self, tiles: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
         """

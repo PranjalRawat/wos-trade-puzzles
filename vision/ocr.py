@@ -38,39 +38,57 @@ class OCREngine:
             Scene title or None if not detected
         """
         try:
-            # Extract top region
+            # Check if image is already a small header region or full screenshot
             height, width = image.shape[:2]
-            top_height = int(height * top_region_ratio)
-            # Focus on the left 60% of the header to avoid "Complete this Scene..." text
-            header = image[0:top_height, 0:int(width * 0.6)]
+            
+            # If height/width ratio is small (e.g., < 0.4), it's likely already a header crop
+            if height / width < 0.4:
+                header = image
+            else:
+                top_height = int(height * top_region_ratio)
+                # Take a wider area (90%) to be safe for diverse screen ratios
+                header = image[0:top_height, 0:int(width * 0.9)]
             
             # Preprocess
             preprocessed = self._preprocess_for_ocr(header)
             
-            # Run OCR with page segmentation mode 6 (Assume a single uniform block of text)
-            # or 11 (Sparse text)
+            # Run OCR with page segmentation mode 3
             text = pytesseract.image_to_string(
                 preprocessed,
-                config='--psm 6'
+                config='--psm 3'
             )
             
-            # Clean up result - remove common OCR artifacts/instructions
+            # Clean up result
             lines = [line.strip() for line in text.split('\n') if line.strip()]
             
-            # Filter lines: skip "Complete this...", skip very short ones
-            ignore_keywords = ["complete", "scene", "obtain", "reward", "this", "to"]
+            # Filter lines: skip obvious instructions/UI text
+            ignore_keywords = ["complete", "obtain", "reward", "this", "to", "tap", "click", "collect"]
             filtered_lines = []
             for line in lines:
                 lower_line = line.lower()
-                if any(kw in lower_line for kw in ignore_keywords) and len(lower_line) > 15:
+                # Skip lines that look like instructions or UI help
+                if any(kw in lower_line for kw in ignore_keywords) and len(lower_line) > 10:
                     continue
-                if len(line) > 3:
-                    filtered_lines.append(line)
+                # Skip numeric progress bars (e.g., 10/12)
+                if "/" in line and any(c.isdigit() for c in line):
+                    continue
+                # Skip artifacts or very short noise
+                if len(line) < 3:
+                    continue
+                filtered_lines.append(line)
             
             if filtered_lines:
-                # Usually the scene title is the longest or most prominent text in the header box
+                # Scene titles often appear first or are distinct
+                # We prioritize the first decent text block that isn't too long
+                for candidate in filtered_lines:
+                    # Scene titles are rarely more than 40 chars
+                    if 3 <= len(candidate) <= 40:
+                        logger.info(f"Detected scene title: {candidate}")
+                        return candidate
+                
+                # Fallback to longest if no matches
                 scene_title = max(filtered_lines, key=len)
-                logger.info(f"Detected scene title: {scene_title}")
+                logger.info(f"Fallback scene title: {scene_title}")
                 return scene_title
             
             logger.warning("No scene title text detected")
@@ -97,19 +115,20 @@ class OCREngine:
         # Resize to improve OCR (upscale 2x)
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
         
-        # Apply adaptive thresholding to handle uneven lighting
+        # Apply adaptive thresholding
         thresh = cv2.adaptiveThreshold(
             gray, 255, 
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 
+            cv2.THRESH_BINARY, 
             11, 2
         )
         
-        # Check if we should invert (OCR generally likes black text on white background)
-        # Count white vs black pixels
+        # Ensure black text on white background (OCR preference)
         white_pixels = cv2.countNonZero(thresh)
         total_pixels = thresh.shape[0] * thresh.shape[1]
-        if white_pixels > total_pixels * 0.5:
+        # If image is mostly black, it's likely white text on black background.
+        # We invert it to get black text on white background.
+        if white_pixels < total_pixels * 0.3: # Threshold 0.3 for sparse text
             thresh = cv2.bitwise_not(thresh)
             
         return thresh

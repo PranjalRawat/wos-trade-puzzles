@@ -77,9 +77,9 @@ class TileParser:
         hsv = cv2.cvtColor(tile_image, cv2.COLOR_BGR2HSV)
         
         # Define yellow/gold color range for stars
-        # Adjust these values based on actual game UI
-        lower_yellow = np.array([15, 80, 80])  # Lowered thresholds for better detection
-        upper_yellow = np.array([40, 255, 255])
+        # Use lower saturation/value to catch highlights and smaller stars
+        lower_yellow = np.array([15, 40, 40])
+        upper_yellow = np.array([50, 255, 255])
         
         # Create mask for star color
         mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -91,7 +91,7 @@ class TileParser:
         star_count = 0
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > 30:  # Lowered minimum area
+            if area > 15:  # Lowered further for smaller stars in high-res
                 star_count += 1
         
         # Pieces can have 0 stars if they are grayed out/missing
@@ -120,20 +120,21 @@ class TileParser:
         """
         # Look for badge in bottom-right corner (based on provided screenshots)
         height, width = tile_image.shape[:2]
-        # Badge is typically in the bottom 30% and right 40%
-        badge_region = tile_image[int(height*0.7):height, int(width*0.6):width]
+        # Badge is typically in the bottom 35% and right 50%
+        badge_region = tile_image[int(height*0.65):height, int(width*0.5):width]
         
         # Convert to HSV
         hsv = cv2.cvtColor(badge_region, cv2.COLOR_BGR2HSV)
         
-        # Define color range for duplicate badge (usually green in screenshots)
-        lower_green = np.array([35, 50, 50])
-        upper_green = np.array([85, 255, 255])
+        # Define color range for duplicate badge (usually green)
+        # Lenient thresholds for varied lighting
+        lower_green = np.array([30, 30, 30])
+        upper_green = np.array([90, 255, 255])
         
         mask = cv2.inRange(hsv, lower_green, upper_green)
         
         # Check if badge exists
-        if cv2.countNonZero(mask) < 40:
+        if cv2.countNonZero(mask) < 20: # Lowered threshold
             # No badge detected = 0 duplicates
             return 0, 0.9
         

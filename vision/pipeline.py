@@ -62,12 +62,24 @@ class VisionPipeline:
             # Convert to OpenCV format
             image = self._bytes_to_cv2(image_data)
             
-            # Extract scene name
-            scene = self.ocr.extract_scene_title(image)
+            # Extract scene name from isolated Header Zone
+            header_region = self.grid_detector.get_header_region(image)
+            scene = self.ocr.extract_scene_title(header_region)
             result["scene"] = scene
             
+            # Detect puzzle board (Grid Zone)
+            board_bbox = self.grid_detector.detect_puzzle_board(image)
+            
             # Detect tiles
-            tiles = self.grid_detector.detect_tiles(image)
+            # If board detected, we process the board region for cleaner tile detection
+            if board_bbox:
+                bx, by, bw, bh = board_bbox
+                board_img = image[by:by+bh, bx:bx+bw]
+                tiles = self.grid_detector.detect_tiles(board_img)
+                # Adjust tile coordinates back to full image space
+                tiles = [(tx + bx, ty + by, tw, th) for tx, ty, tw, th in tiles]
+            else:
+                tiles = self.grid_detector.detect_tiles(image)
             
             if not tiles:
                 result["error"] = "No tiles detected in image"
@@ -80,7 +92,7 @@ class VisionPipeline:
                 tile_data = self.tile_parser.parse_tile(tile_image)
                 
                 # Only include if we detected valid data
-                if tile_data["stars"] > 0:
+                if tile_data["stars"] > 0 or tile_data["confidence"] > 0.6:
                     pieces.append({
                         "slot_index": slot_index,
                         "stars": tile_data["stars"],
@@ -91,7 +103,9 @@ class VisionPipeline:
             result["pieces"] = pieces
             result["success"] = True
             
-            logger.info(f"Processed image: {len(pieces)} pieces found, scene={scene}")
+            # Optional: Cross-verify with progress bar if OCR found it (e.g., "10/12")
+            # For now, we just log the findings
+            logger.info(f"Processed image (Sectional): {len(pieces)} pieces found, scene={scene}")
             
         except Exception as e:
             logger.error(f"Vision pipeline failed: {e}", exc_info=True)
@@ -166,12 +180,22 @@ class VisionPipeline:
             # Convert to OpenCV format
             image = self._bytes_to_cv2(image_data)
             
-            # Extract scene name
-            scene = self.ocr.extract_scene_title(image)
+            # Extract scene name from isolated Header Zone
+            header_region = self.grid_detector.get_header_region(image)
+            scene = self.ocr.extract_scene_title(header_region)
             result["scene"] = scene
             
+            # Detect puzzle board (Grid Zone)
+            board_bbox = self.grid_detector.detect_puzzle_board(image)
+            
             # Detect tiles
-            tiles = self.grid_detector.detect_tiles(image)
+            if board_bbox:
+                bx, by, bw, bh = board_bbox
+                board_img = image[by:by+bh, bx:bx+bw]
+                tiles = self.grid_detector.detect_tiles(board_img)
+                tiles = [(tx + bx, ty + by, tw, th) for tx, ty, tw, th in tiles]
+            else:
+                tiles = self.grid_detector.detect_tiles(image)
             
             if not tiles:
                 result["error"] = "No tiles detected in image"
@@ -183,7 +207,7 @@ class VisionPipeline:
                 tile_image = self.grid_detector.extract_tile_image(image, tile_bbox)
                 tile_data = self.tile_parser.parse_tile(tile_image)
                 
-                if tile_data["stars"] > 0:
+                if tile_data["stars"] > 0 or tile_data["confidence"] > 0.6:
                     pieces.append({
                         "slot_index": slot_index,
                         "stars": tile_data["stars"],
