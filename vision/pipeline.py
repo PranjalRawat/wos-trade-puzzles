@@ -86,22 +86,53 @@ class VisionPipeline:
             client = genai.Client(api_key=Config.GOOGLE_API_KEY)
             
             prompt = (
-                "This is a screenshot from a puzzle game called 'Whiteout Survival'. "
-                "The image shows a 3x4 grid of puzzle tiles. "
-                "Please analyze the image and return a JSON object with the following structure: "
+                "This is a screenshot from the mobile game 'Whiteout Survival'. "
+                "The image shows a puzzle inventory screen with a grid of puzzle pieces.\n\n"
+
+                "Your task is to analyze the image and return a JSON object with the following structure:\n"
                 "{\n"
-                "  \"scene\": \"The name of the scene from the top header\",\n"
+                "  \"scene\": \"<scene name>\",\n"
+                "  \"total_slots\": <integer>,\n"
                 "  \"pieces\": [\n"
-                "    { \"slot_index\": 1, \"stars\": 1, \"duplicates\": 0 },\n"
-                "    ...\n"
+                "    {\n"
+                "      \"slot_index\": <integer>,\n"
+                "      \"owned\": <true|false>,\n"
+                "      \"duplicates\": <integer>,\n"
+                "      \"locked\": <true|false>\n"
+                "    }\n"
                 "  ]\n"
-                "}\n"
-                "Rules:\n"
-                "1. 'scene' is the title text at the top (e.g., 'Honor and Glory').\n"
-                "2. There are exactly 12 slots (indexed 1 to 12). Only include slots that are visible and owned.\n"
-                "3. 'stars' is the count of yellow stars (1-5). Use 1 if only the slot is visible but no stars are clear.\n"
-                "4. 'duplicates' is the number in the green badge (if any). Default to 0.\n"
-                "Respond ONLY with the JSON block. No markdown markers."
+                "}\n\n"
+
+                "IMPORTANT RULES:\n"
+                "1. The grid always has exactly 3 columns, but the number of rows may vary (3×N grid).\n"
+                "2. Slot indexing must be assigned left-to-right, top-to-bottom starting at 1.\n"
+                "3. 'scene' is the name shown in the prominent header at the top of the screen "
+                "(e.g., 'The Communicative Heart' or 'Honor and Glory').\n"
+                "4. 'total_slots' is the total number of grid slots visible (including missing pieces).\n"
+                "5. Each slot must produce exactly one entry in 'pieces'. Do NOT omit missing pieces.\n\n"
+
+                "OWNERSHIP RULES:\n"
+                "- If the puzzle tile is colored, owned = true.\n"
+                "- If the puzzle tile is gray or shadowed, owned = false.\n\n"
+
+                "DUPLICATES RULES:\n"
+                "- If a green badge like '+1', '+2', '+3', etc. is present, "
+                "set 'duplicates' to that number.\n"
+                "- If no green badge is present, set 'duplicates' to 0.\n\n"
+
+                "STARS / LOCK RULES:\n"
+                "- Count the number of yellow stars above the piece.\n"
+                "- If the piece has exactly 5 stars, set locked = true.\n"
+                "- Otherwise, set locked = false.\n"
+                "- Star count beyond determining locked/unlocked is NOT required.\n\n"
+
+                "CRITICAL CONSTRAINTS:\n"
+                "- Do NOT infer trades or inventory changes.\n"
+                "- Do NOT guess missing data.\n"
+                "- If a detail is unclear, make the most visually conservative choice.\n\n"
+
+                "Respond ONLY with the JSON object. "
+                "Do NOT include explanations, markdown, or extra text."
             )
             
             # Use client.aio for true async support
@@ -128,8 +159,23 @@ class VisionPipeline:
             if "scene" not in data or "pieces" not in data:
                 logger.warning("Gemini JSON missing required fields")
                 return None
-                
-            return data
+            
+            # Convert the new 'owned' and 'locked' structure to our DB-ready structure
+            # Logic: We only care about OWNED pieces. 
+            # locked=True -> stars=5, locked=False -> stars=1 (arbitrary but enough to identify un-maxed)
+            filtered_pieces = []
+            for p in data["pieces"]:
+                if p.get("owned", False):
+                    filtered_pieces.append({
+                        "slot_index": p["slot_index"],
+                        "stars": 5 if p.get("locked", False) else 1,
+                        "duplicates": p.get("duplicates", 0)
+                    })
+            
+            return {
+                "scene": data["scene"],
+                "pieces": filtered_pieces
+            }
             
         except Exception as e:
             logger.error(f"Gemini API (google-genai async) failed: {e}")
