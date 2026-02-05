@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any, List
 from io import BytesIO
 from PIL import Image
 import logging
+import asyncio
 
 from utils.image_hash import compute_image_hash
 from config import Config
@@ -135,15 +136,33 @@ class VisionPipeline:
                 "Do NOT include explanations, markdown, or extra text."
             )
             
-            # Use client.aio for true async support
-            response = await client.aio.models.generate_content(
-                model='gemini-3-flash-preview',
-                contents=[
-                    prompt,
-                    types.Part.from_bytes(data=image_data, mime_type='image/png')
-                ]
-            )
+            # Use client.aio for true async support with retries
+            max_retries = 3
+            base_delay = 1  # seconds
             
+            response = None
+            for attempt in range(max_retries):
+                try:
+                    response = await client.aio.models.generate_content(
+                        model='gemini-3-flash-preview',
+                        contents=[
+                            prompt,
+                            types.Part.from_bytes(data=image_data, mime_type='image/png')
+                        ]
+                    )
+                    break  # Success
+                except Exception as e:
+                    if "503" in str(e) or "429" in str(e) or "overloaded" in str(e).lower():
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            logger.warning(f"Gemini API overloaded/rate-limited (Attempt {attempt+1}/{max_retries}). Retrying in {delay}s...")
+                            await asyncio.sleep(delay)
+                            continue
+                    raise e  # Re-raise if not a transient error or out of retries
+            
+            if not response:
+                return None
+                
             text = response.text.strip()
             logger.debug(f"Gemini raw response: {text}")
             
