@@ -147,15 +147,20 @@ async def add_piece(user_id: int, scene: str, slot_index: int, stars: int, dupli
     
     db = await get_database()
     
+    # Use UPSERT (INSERT ... ON CONFLICT) to prevent crashes
+    # Note: Stars are immutable once set, so we only update duplicates
     await db.execute(
         """
         INSERT INTO inventory (user_id, scene, slot_index, stars, duplicates)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, scene, slot_index) DO UPDATE SET
+            duplicates = MAX(inventory.duplicates, excluded.duplicates),
+            updated_at = CURRENT_TIMESTAMP
         """,
         (user_id, scene, slot_index, stars, duplicates)
     )
     
-    logger.info(f"Added piece: user={user_id}, scene={scene}, slot={slot_index}, stars={stars}, duplicates={duplicates}")
+    logger.info(f"Add/Update piece: user={user_id}, scene={scene}, slot={slot_index}, stars={stars}, duplicates={duplicates}")
 
 
 async def update_duplicates(user_id: int, scene: str, slot_index: int, new_count: int) -> None:

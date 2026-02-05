@@ -81,11 +81,20 @@ async def merge_scan_results(
     Returns:
         MergeResult with categorized changes
     """
+    # Deduplicate scan_data
+    # If the same piece is detected multiple times (e.g. across multiple images),
+    # the latest detection in the batch takes precedence.
+    deduped_scan = {}
+    for piece in scan_data:
+        scene = normalize_scene_name(piece["scene"])
+        slot = piece["slot_index"]
+        key = (scene, slot)
+        # Latest detection in the batch overrides earlier ones
+        deduped_scan[key] = piece
+
     result = MergeResult()
     
-    for piece_data in scan_data:
-        scene = normalize_scene_name(piece_data["scene"])
-        slot_index = piece_data["slot_index"]
+    for (scene, slot_index), piece_data in deduped_scan.items():
         scanned_stars = piece_data["stars"]
         scanned_duplicates = piece_data["duplicates"]
         
