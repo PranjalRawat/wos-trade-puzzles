@@ -86,71 +86,48 @@ class VisionPipeline:
             # Using the async client
             client = genai.Client(api_key=Config.GOOGLE_API_KEY)
             
-            PROMPT = (
-                "You are analyzing multiple screenshots from the mobile game 'Whiteout Survival'. "
-                "All screenshots were uploaded by the SAME user.\n\n"
+            prompt = (
+                "You are analyzing one or more screenshots from the mobile game 'Whiteout Survival'. "
+                "All screenshots belong to the SAME user.\n\n"
             
-                "Your task is to build a SINGLE, FINAL inventory for each scene visible in the screenshots.\n\n"
+                "GOAL:\n"
+                "Build a FINAL inventory for each scene shown in the screenshots.\n\n"
             
-                "SCENE GROUPING RULES:\n"
-                "1. Each screenshot contains a scene title shown at the top of the screen "
-                "(e.g., 'Honor and Glory', 'Mining the Fire').\n"
-                "2. Screenshots with DIFFERENT scene titles must ALWAYS be handled separately.\n"
-                "3. Screenshots with the SAME scene title belong to the SAME scene inventory for the SAME user.\n"
-                "4. Screenshots are evidence only; they do not represent inventory by themselves.\n\n"
+                "SCENE RULES:\n"
+                "1. Each screenshot has a scene title at the top.\n"
+                "2. Screenshots with DIFFERENT scene titles are ALWAYS handled separately.\n"
+                "3. Screenshots with the SAME scene title contribute to the SAME scene inventory.\n\n"
             
-                "SCROLLING AND OVERLAP RULES:\n"
-                "5. A scene may contain more than 12 pieces.\n"
-                "6. Screenshots may show only PARTIAL views of a scene due to scrolling.\n"
-                "7. Screenshots from the same scene may overlap and show some of the SAME pieces.\n"
-                "8. Overlap is expected and must NOT cause duplication.\n\n"
+                "SCROLLING & OVERLAP:\n"
+                "4. A scene may have more than 12 pieces (3×N grid).\n"
+                "5. Screenshots may show PARTIAL and OVERLAPPING portions of the same scene.\n"
+                "6. Overlapping pieces must be treated as the SAME piece.\n\n"
             
-                "PIECE IDENTITY RULES:\n"
-                "9. Within a single scene, each puzzle piece has a UNIQUE visual design.\n"
-                "10. If two pieces from DIFFERENT screenshots have the SAME scene title "
-                "and the SAME visual design, they represent the SAME puzzle piece.\n"
-                "11. Pieces must NEVER be matched across different scenes, even if they look similar.\n\n"
+                "PIECE IDENTITY:\n"
+                "7. Within a scene, each puzzle piece has a UNIQUE visual design.\n"
+                "8. Pieces may ONLY be matched across screenshots if the scene title is the SAME.\n\n"
             
                 "INVENTORY RULES:\n"
-                "12. The puzzle grid is always 3 columns by N rows.\n"
-                "13. Slot indexing is GLOBAL PER SCENE and must be assigned left-to-right, "
-                "top-to-bottom starting at slot_index = 1.\n"
-                "14. Owned = the tile is colored.\n"
-                "15. Missing = the tile is gray or shadowed.\n"
-                "16. Duplicates = the number shown in a green '+N' badge (default 0).\n"
-                "17. Locked = true ONLY if the piece has exactly 5 stars.\n"
-                "18. Never decrease duplicates.\n"
-                "19. Never infer trades.\n"
-                "20. Never invent pieces that are not visible in at least one screenshot.\n\n"
+                "9. Grid is 3 columns, N rows. Slot indexing is GLOBAL per scene, left-to-right, top-to-bottom starting at 1.\n"
+                "10. owned = tile is colored; missing = tile is gray/shadowed.\n"
+                "11. duplicates = green '+N' badge (default 0).\n"
+                "12. locked = true ONLY if exactly 5 stars.\n"
+                "13. Never decrease duplicates, infer trades, or invent unseen pieces.\n\n"
             
-                "CONFLICT RESOLUTION RULES:\n"
-                "21. If the SAME piece appears in multiple screenshots with different values:\n"
-                "- Prefer owned = true over false.\n"
-                "- Prefer the HIGHER duplicate count.\n"
-                "- Prefer locked = true over false.\n\n"
+                "CONFLICT RESOLUTION:\n"
+                "14. If the same piece appears multiple times: prefer owned=true, higher duplicates, locked=true.\n\n"
             
-                "OUTPUT FORMAT:\n"
-                "For EACH scene detected, output ONE JSON object with this structure:\n"
-                "{\n"
-                "  \"scene\": \"<scene name>\",\n"
-                "  \"total_slots\": <integer>,\n"
-                "  \"pieces\": [\n"
-                "    {\n"
-                "      \"slot_index\": <integer>,\n"
-                "      \"owned\": <true|false>,\n"
-                "      \"duplicates\": <integer>,\n"
-                "      \"locked\": <true|false>\n"
-                "    }\n"
-                "  ]\n"
-                "}\n\n"
+                "OUTPUT:\n"
+                "For EACH scene, return ONE JSON object:\n"
+                "{ \"scene\": \"<name>\", \"total_slots\": <int>, \"pieces\": [ "
+                "{ \"slot_index\": <int>, \"owned\": <true|false>, "
+                "\"duplicates\": <int>, \"locked\": <true|false> } ] }\n\n"
             
-                "If a progress bar like '10 / 18' is visible, use the second number as total_slots.\n"
-                "If no progress bar is visible, infer total_slots from the highest slot_index observed.\n\n"
+                "If a progress bar like '10 / 18' is visible, use the second number as total_slots; "
+                "otherwise use the highest slot_index.\n\n"
             
-                "Respond ONLY with valid JSON. "
-                "Do NOT include explanations, markdown, or extra text."
+                "Respond ONLY with valid JSON. No explanations or extra text."
             )
-
             # Use client.aio for true async support with retries
             max_retries = 3
             base_delay = 1  # seconds
