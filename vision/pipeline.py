@@ -86,11 +86,51 @@ class VisionPipeline:
             # Using the async client
             client = genai.Client(api_key=Config.GOOGLE_API_KEY)
             
-            prompt = (
-                "This is a screenshot from the mobile game 'Whiteout Survival'. "
-                "The image shows a puzzle inventory screen with a grid of puzzle pieces.\n\n"
-
-                "Your task is to analyze the image and return a JSON object with the following structure:\n"
+            PROMPT = (
+                "You are analyzing multiple screenshots from the mobile game 'Whiteout Survival'. "
+                "All screenshots were uploaded by the SAME user.\n\n"
+            
+                "Your task is to build a SINGLE, FINAL inventory for each scene visible in the screenshots.\n\n"
+            
+                "SCENE GROUPING RULES:\n"
+                "1. Each screenshot contains a scene title shown at the top of the screen "
+                "(e.g., 'Honor and Glory', 'Mining the Fire').\n"
+                "2. Screenshots with DIFFERENT scene titles must ALWAYS be handled separately.\n"
+                "3. Screenshots with the SAME scene title belong to the SAME scene inventory for the SAME user.\n"
+                "4. Screenshots are evidence only; they do not represent inventory by themselves.\n\n"
+            
+                "SCROLLING AND OVERLAP RULES:\n"
+                "5. A scene may contain more than 12 pieces.\n"
+                "6. Screenshots may show only PARTIAL views of a scene due to scrolling.\n"
+                "7. Screenshots from the same scene may overlap and show some of the SAME pieces.\n"
+                "8. Overlap is expected and must NOT cause duplication.\n\n"
+            
+                "PIECE IDENTITY RULES:\n"
+                "9. Within a single scene, each puzzle piece has a UNIQUE visual design.\n"
+                "10. If two pieces from DIFFERENT screenshots have the SAME scene title "
+                "and the SAME visual design, they represent the SAME puzzle piece.\n"
+                "11. Pieces must NEVER be matched across different scenes, even if they look similar.\n\n"
+            
+                "INVENTORY RULES:\n"
+                "12. The puzzle grid is always 3 columns by N rows.\n"
+                "13. Slot indexing is GLOBAL PER SCENE and must be assigned left-to-right, "
+                "top-to-bottom starting at slot_index = 1.\n"
+                "14. Owned = the tile is colored.\n"
+                "15. Missing = the tile is gray or shadowed.\n"
+                "16. Duplicates = the number shown in a green '+N' badge (default 0).\n"
+                "17. Locked = true ONLY if the piece has exactly 5 stars.\n"
+                "18. Never decrease duplicates.\n"
+                "19. Never infer trades.\n"
+                "20. Never invent pieces that are not visible in at least one screenshot.\n\n"
+            
+                "CONFLICT RESOLUTION RULES:\n"
+                "21. If the SAME piece appears in multiple screenshots with different values:\n"
+                "- Prefer owned = true over false.\n"
+                "- Prefer the HIGHER duplicate count.\n"
+                "- Prefer locked = true over false.\n\n"
+            
+                "OUTPUT FORMAT:\n"
+                "For EACH scene detected, output ONE JSON object with this structure:\n"
                 "{\n"
                 "  \"scene\": \"<scene name>\",\n"
                 "  \"total_slots\": <integer>,\n"
@@ -103,39 +143,14 @@ class VisionPipeline:
                 "    }\n"
                 "  ]\n"
                 "}\n\n"
-
-                "IMPORTANT RULES:\n"
-                "1. The grid always has exactly 3 columns, but the number of rows may vary (3×N grid).\n"
-                "2. Slot indexing must be assigned left-to-right, top-to-bottom starting at 1.\n"
-                "3. 'scene' is the name shown in the prominent header at the top of the screen "
-                "(e.g., 'The Communicative Heart' or 'Honor and Glory').\n"
-                "4. 'total_slots' is the total number of grid slots visible (including missing pieces).\n"
-                "5. Each slot must produce exactly one entry in 'pieces'. Do NOT omit missing pieces.\n\n"
-
-                "OWNERSHIP RULES:\n"
-                "- If the puzzle tile is colored, owned = true.\n"
-                "- If the puzzle tile is gray or shadowed, owned = false.\n\n"
-
-                "DUPLICATES RULES:\n"
-                "- If a green badge like '+1', '+2', '+3', etc. is present, "
-                "set 'duplicates' to that number.\n"
-                "- If no green badge is present, set 'duplicates' to 0.\n\n"
-
-                "STARS / LOCK RULES:\n"
-                "- Count the number of yellow stars above the piece.\n"
-                "- If the piece has exactly 5 stars, set locked = true.\n"
-                "- Otherwise, set locked = false.\n"
-                "- Star count beyond determining locked/unlocked is NOT required.\n\n"
-
-                "CRITICAL CONSTRAINTS:\n"
-                "- Do NOT infer trades or inventory changes.\n"
-                "- Do NOT guess missing data.\n"
-                "- If a detail is unclear, make the most visually conservative choice.\n\n"
-
-                "Respond ONLY with the JSON object. "
+            
+                "If a progress bar like '10 / 18' is visible, use the second number as total_slots.\n"
+                "If no progress bar is visible, infer total_slots from the highest slot_index observed.\n\n"
+            
+                "Respond ONLY with valid JSON. "
                 "Do NOT include explanations, markdown, or extra text."
             )
-            
+
             # Use client.aio for true async support with retries
             max_retries = 3
             base_delay = 1  # seconds
